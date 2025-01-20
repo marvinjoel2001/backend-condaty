@@ -10,82 +10,16 @@
   ],
   "products": [
     {
-      "id": 2,
-      "name": "Servicio de Limpieza",
-      "description": "Servicio profesional de limpieza para departamentos",
-      "price": 150,
-      "category": "servicios",
-      "images": ["cleaning1.jpg"],
-      "condominio": "Torres del Sol",
-      "sellerId": 1
-    },
-    {
       "id": 3,
       "name": "Mantenimiento de Jardín 2",
       "description": "Servicio de jardinería y paisajismo",
       "price": 200,
       "category": "servicios",
-      "images": ["/images/garden.jpg"],
+      "images": [
+        "/images/garden.jpg"
+      ],
       "condominio": "Torres del Sol",
       "sellerId": 1
-    },
-    {
-      "id": 4,
-      "name": "Plomería",
-      "description": "Servicios de plomería y reparaciones",
-      "price": 180,
-      "category": "servicios",
-      "images": ["plumbing1.jpg"],
-      "condominio": "Torres del Sol",
-      "sellerId": 1
-    },
-    {
-      "id": 5,
-      "name": "Electricista",
-      "description": "Servicios eléctricos y mantenimiento",
-      "price": 160,
-      "category": "servicios",
-      "images": ["electric1.jpg"],
-      "condominio": "Torres del Sol",
-      "sellerId": 1
-    },
-    {
-      "name": "producto de prueba",
-      "description": "pruebita",
-      "price": "150",
-      "category": "",
-      "condominio": "",
-      "images": [],
-      "id": 6
-    },
-    {
-      "name": "podadora",
-      "description": "vendo podadora nueva ",
-      "price": "300",
-      "category": "productos",
-      "condominio": "",
-      "images": [],
-      "id": 7
-    },
-    {
-      "name": "prueba2",
-      "description": "pruebita",
-      "price": "100",
-      "category": "servicios",
-      "condominio": "Torres del Sol",
-      "images": [],
-      "sellerId": 1,
-      "id": 8
-    },
-    {
-      "name": "fdsfsa",
-      "description": "sdfsdfsfddfssfd",
-      "price": 0,
-      "category": "servicios",
-      "condominio": "Torres del Sol",
-      "images": [],
-      "sellerId": 1,
-      "id": 9
     },
     {
       "id": 1737317698798,
@@ -95,8 +29,23 @@
       "category": "productos",
       "condominio": "Torres del Sol",
       "sellerId": 1,
-      "images": ["images/1737317698793-338160125.jpeg"],
+      "images": [
+        "images/1737317698793-338160125.jpeg"
+      ],
       "createdAt": "2025-01-19T20:14:58.798Z"
+    },
+    {
+      "id": 1737339244952,
+      "name": "1234156454654",
+      "description": "4567866151313",
+      "price": 200,
+      "category": "productos",
+      "condominio": "Torres del Sol",
+      "sellerId": 1,
+      "images": [
+        "images/1737339244946-583411716.jpeg"
+      ],
+      "createdAt": "2025-01-20T02:14:04.952Z"
     }
   ],
   "orders": [
