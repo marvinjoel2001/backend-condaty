@@ -15,9 +15,7 @@
       "description": "Servicio profesional de limpieza para departamentos",
       "price": 150,
       "category": "servicios",
-      "images": [
-        "cleaning1.jpg"
-      ],
+      "images": ["cleaning1.jpg"],
       "condominio": "Torres del Sol",
       "sellerId": 1
     },
@@ -27,9 +25,7 @@
       "description": "Servicio de jardinería y paisajismo",
       "price": 200,
       "category": "servicios",
-      "images": [
-        "/images/garden.jpg"
-      ],
+      "images": ["/images/garden.jpg"],
       "condominio": "Torres del Sol",
       "sellerId": 1
     },
@@ -39,9 +35,7 @@
       "description": "Servicios de plomería y reparaciones",
       "price": 180,
       "category": "servicios",
-      "images": [
-        "plumbing1.jpg"
-      ],
+      "images": ["plumbing1.jpg"],
       "condominio": "Torres del Sol",
       "sellerId": 1
     },
@@ -51,9 +45,7 @@
       "description": "Servicios eléctricos y mantenimiento",
       "price": 160,
       "category": "servicios",
-      "images": [
-        "electric1.jpg"
-      ],
+      "images": ["electric1.jpg"],
       "condominio": "Torres del Sol",
       "sellerId": 1
     },
@@ -103,9 +95,7 @@
       "category": "productos",
       "condominio": "Torres del Sol",
       "sellerId": 1,
-      "images": [
-        "images/1737317698793-338160125.jpeg"
-      ],
+      "images": ["images/1737317698793-338160125.jpeg"],
       "createdAt": "2025-01-19T20:14:58.798Z"
     }
   ],

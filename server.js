@@ -1,38 +1,52 @@
+require("dotenv").config();
 const jsonServer = require("json-server");
 const jwt = require("jsonwebtoken");
 const multer = require("multer");
-const path = require("path");
-const fs = require("fs");
+const admin = require("firebase-admin");
 
-const server = jsonServer.create();
-const router = jsonServer.router("db.json");
-const middlewares = jsonServer.defaults({
-  static: "public", // Servir archivos estáticos desde la carpeta public
-});
-
-const SECRET_KEY = "your-secret-key";
-const UPLOAD_DIRECTORY = "public/images";
-
-// Asegurar que el directorio de uploads existe
-if (!fs.existsSync(UPLOAD_DIRECTORY)) {
-  fs.mkdirSync(UPLOAD_DIRECTORY, { recursive: true });
+// Usar directamente el archivo de credenciales para desarrollo
+let serviceAccount;
+if (process.env.NODE_ENV === "production") {
+  serviceAccount = {
+    type: "service_account",
+    project_id: process.env.FIREBASE_PROJECT_ID,
+    private_key: process.env.FIREBASE_PRIVATE_KEY
+      ? process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, "\n")
+      : undefined,
+    client_email: process.env.FIREBASE_CLIENT_EMAIL,
+    client_id: process.env.FIREBASE_CLIENT_ID,
+    auth_uri: process.env.FIREBASE_AUTH_URI,
+    token_uri: process.env.FIREBASE_TOKEN_URI,
+    auth_provider_x509_cert_url: process.env.FIREBASE_AUTH_PROVIDER_CERT_URL,
+    client_x509_cert_url: process.env.FIREBASE_CLIENT_CERT_URL,
+  };
+} else {
+  // En desarrollo, usa el archivo JSON directamente
+  serviceAccount = require("./condaty-e5229-firebase-adminsdk-fbsvc-6de6e2d206.json");
 }
 
-// Configurar multer para el manejo de archivos
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, UPLOAD_DIRECTORY);
-  },
-  filename: function (req, file, cb) {
-    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-    cb(null, uniqueSuffix + path.extname(file.originalname));
-  },
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+  databaseURL:
+    process.env.FIREBASE_DATABASE_URL ||
+    "https://condaty-e5229-default-rtdb.firebaseio.com",
+  storageBucket:
+    process.env.FIREBASE_STORAGE_BUCKET || "condaty-e5229.appspot.com",
 });
 
+const db = admin.database();
+const bucket = admin.storage().bucket();
+const server = jsonServer.create();
+const middlewares = jsonServer.defaults({
+  static: "public",
+});
+
+const SECRET_KEY = process.env.JWT_SECRET || "your-secret-key";
+
+// Configuración de multer para memoria
 const upload = multer({
-  storage: storage,
-  fileFilter: function (req, file, cb) {
-    // Validar tipos de archivo
+  storage: multer.memoryStorage(),
+  fileFilter: (req, file, cb) => {
     if (file.mimetype.startsWith("image/")) {
       cb(null, true);
     } else {
@@ -40,38 +54,132 @@ const upload = multer({
     }
   },
   limits: {
-    fileSize: 5 * 1024 * 1024, // 5MB límite
+    fileSize: 5 * 1024 * 1024,
   },
 });
+
+// Función para subir archivos a Firebase Storage
+async function uploadFileToFirebase(file) {
+  try {
+    const fileName = `${Date.now()}-${Math.round(Math.random() * 1e9)}-${
+      file.originalname
+    }`;
+    const fileUpload = bucket.file(`images/${fileName}`);
+
+    const blobStream = fileUpload.createWriteStream({
+      metadata: {
+        contentType: file.mimetype,
+      },
+    });
+
+    return new Promise((resolve, reject) => {
+      blobStream.on("error", (error) => reject(error));
+
+      blobStream.on("finish", async () => {
+        try {
+          await fileUpload.makePublic();
+          const publicUrl = `https://storage.googleapis.com/${bucket.name}/${fileUpload.name}`;
+          resolve(publicUrl);
+        } catch (error) {
+          reject(error);
+        }
+      });
+
+      blobStream.end(file.buffer);
+    });
+  } catch (error) {
+    console.error("Error uploading file:", error);
+    throw error;
+  }
+}
 
 server.use(middlewares);
 server.use(jsonServer.bodyParser);
 
-// Autenticación - mantiene compatibilidad con integraciones existentes
-server.post("/auth/login", (req, res) => {
-  const { email, password } = req.body;
-  const db = router.db;
-  const user = db.get("users").find({ email, password }).value();
+// Login con Firebase
+server.post("/auth/login", async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    const usersRef = db.ref("users");
+    const snapshot = await usersRef
+      .orderByChild("email")
+      .equalTo(email)
+      .once("value");
+    const users = snapshot.val();
 
-  if (user) {
-    const token = jwt.sign({ userId: user.id, email: user.email }, SECRET_KEY, {
-      expiresIn: "1h",
-    });
-    res.json({
-      token,
-      user: {
-        id: user.id,
-        email: user.email,
-        name: user.name,
-        condominio: user.condominio,
-      },
-    });
-  } else {
-    res.status(401).json({ message: "Email o contraseña incorrectos" });
+    if (users) {
+      const userId = Object.keys(users)[0];
+      const user = users[userId];
+
+      if (user.password === password) {
+        const token = jwt.sign({ userId, email: user.email }, SECRET_KEY, {
+          expiresIn: "1h",
+        });
+
+        res.json({
+          token,
+          user: {
+            id: userId,
+            email: user.email,
+            name: user.name,
+            condominio: user.condominio,
+          },
+        });
+      } else {
+        res.status(401).json({ message: "Email o contraseña incorrectos" });
+      }
+    } else {
+      res.status(401).json({ message: "Email o contraseña incorrectos" });
+    }
+  } catch (error) {
+    res.status(500).json({ message: "Error en el servidor" });
   }
 });
 
-// Middleware de autenticación - mantiene compatibilidad
+server.post("/auth/register", async (req, res) => {
+  try {
+    const { email, password, name, condominio } = req.body;
+
+    const usersRef = db.ref("users");
+    const snapshot = await usersRef
+      .orderByChild("email")
+      .equalTo(email)
+      .once("value");
+
+    if (snapshot.val()) {
+      return res.status(400).json({ message: "El email ya está registrado" });
+    }
+
+    const newUser = {
+      id: Date.now(),
+      email,
+      password,
+      name,
+      condominio,
+      createdAt: new Date().toISOString(),
+    };
+
+    await usersRef.push(newUser);
+
+    const token = jwt.sign({ userId: newUser.id, email }, SECRET_KEY, {
+      expiresIn: "1h",
+    });
+
+    res.status(201).json({
+      token,
+      user: {
+        id: newUser.id,
+        email: newUser.email,
+        name: newUser.name,
+        condominio: newUser.condominio,
+      },
+    });
+  } catch (error) {
+    console.error("Error creating user:", error);
+    res.status(500).json({ message: "Error al crear el usuario" });
+  }
+});
+
 const authMiddleware = (req, res, next) => {
   if (req.method === "GET") {
     next();
@@ -94,25 +202,29 @@ const authMiddleware = (req, res, next) => {
   }
 };
 
-// Manejo de productos con imágenes
+// Productos con Firebase y Storage
 server.post(
   "/products",
   authMiddleware,
   upload.array("images", 5),
-  (req, res) => {
+  async (req, res) => {
     try {
-      const db = router.db;
       let productData;
-
       try {
         productData = JSON.parse(req.body.productData);
-        console.log("Received product data:", productData);
       } catch (e) {
-        console.error("Error parsing productData:", e, req.body.productData);
         return res.status(400).json({ error: "Invalid product data" });
       }
 
-      // Mantener compatibilidad con integraciones existentes
+      // Subir imágenes a Firebase Storage
+      const imageUrls = [];
+      if (req.files && req.files.length > 0) {
+        for (const file of req.files) {
+          const imageUrl = await uploadFileToFirebase(file);
+          imageUrls.push(imageUrl);
+        }
+      }
+
       const newProduct = {
         id: Date.now(),
         name: productData.name || "",
@@ -121,14 +233,12 @@ server.post(
         category: productData.category || "",
         condominio: productData.condominio || "",
         sellerId: productData.sellerId || null,
-        images: req.files
-          ? req.files.map((file) => `images/${file.filename}`)
-          : [],
+        images: imageUrls,
         createdAt: new Date().toISOString(),
       };
 
-      // Guardar en la base de datos
-      db.get("products").push(newProduct).write();
+      const productsRef = db.ref("products");
+      await productsRef.push(newProduct);
 
       res.json(newProduct);
     } catch (error) {
@@ -138,14 +248,22 @@ server.post(
   }
 );
 
-// Actualización de productos
+server.get("/products", async (req, res) => {
+  try {
+    const snapshot = await db.ref("products").once("value");
+    const products = snapshot.val();
+    res.json(products ? Object.values(products) : []);
+  } catch (error) {
+    res.status(500).json({ error: "Error al obtener los productos" });
+  }
+});
+
 server.put(
   "/products/:id",
   authMiddleware,
   upload.array("images", 5),
-  (req, res) => {
+  async (req, res) => {
     try {
-      const db = router.db;
       const { id } = req.params;
       let productData;
 
@@ -155,30 +273,30 @@ server.put(
         return res.status(400).json({ error: "Invalid product data" });
       }
 
-      const existingProduct = db
-        .get("products")
-        .find({ id: parseInt(id) })
-        .value();
+      const productsRef = db.ref("products");
+      const snapshot = await productsRef
+        .orderByChild("id")
+        .equalTo(parseInt(id))
+        .once("value");
+      const products = snapshot.val();
 
-      if (!existingProduct) {
+      if (!products) {
         return res.status(404).json({ error: "Producto no encontrado" });
       }
 
-      // Manejar imágenes
-      let imagesPaths = existingProduct.images || [];
-      if (req.files && req.files.length > 0) {
-        // Eliminar imágenes antiguas
-        existingProduct.images?.forEach((imagePath) => {
-          const fullPath = path.join(process.cwd(), "public", imagePath);
-          if (fs.existsSync(fullPath)) {
-            fs.unlinkSync(fullPath);
-          }
-        });
+      const productKey = Object.keys(products)[0];
+      const existingProduct = products[productKey];
 
-        imagesPaths = req.files.map((file) => `images/${file.filename}`);
+      // Subir nuevas imágenes si existen
+      let imageUrls = existingProduct.images || [];
+      if (req.files && req.files.length > 0) {
+        imageUrls = [];
+        for (const file of req.files) {
+          const imageUrl = await uploadFileToFirebase(file);
+          imageUrls.push(imageUrl);
+        }
       }
 
-      // Mantener compatibilidad con integraciones existentes
       const updatedProduct = {
         ...existingProduct,
         name: productData.name || existingProduct.name,
@@ -187,15 +305,11 @@ server.put(
         category: productData.category || existingProduct.category,
         condominio: productData.condominio || existingProduct.condominio,
         sellerId: productData.sellerId || existingProduct.sellerId,
-        images: imagesPaths,
+        images: imageUrls,
         updatedAt: new Date().toISOString(),
       };
 
-      db.get("products")
-        .find({ id: parseInt(id) })
-        .assign(updatedProduct)
-        .write();
-
+      await productsRef.child(productKey).update(updatedProduct);
       res.json(updatedProduct);
     } catch (error) {
       console.error("Error updating product:", error);
@@ -204,54 +318,43 @@ server.put(
   }
 );
 
-// Eliminar producto
-server.delete("/products/:id", authMiddleware, (req, res) => {
+server.delete("/products/:id", authMiddleware, async (req, res) => {
   try {
-    const db = router.db;
     const { id } = req.params;
 
-    const product = db
-      .get("products")
-      .find({ id: parseInt(id) })
-      .value();
-    if (!product) {
+    const productsRef = db.ref("products");
+    const snapshot = await productsRef
+      .orderByChild("id")
+      .equalTo(parseInt(id))
+      .once("value");
+    const products = snapshot.val();
+
+    if (!products) {
       return res.status(404).json({ error: "Producto no encontrado" });
     }
 
-    // Eliminar imágenes asociadas
-    product.images?.forEach((imagePath) => {
-      const fullPath = path.join(process.cwd(), "public", imagePath);
-      if (fs.existsSync(fullPath)) {
-        fs.unlinkSync(fullPath);
-      }
-    });
-
-    db.get("products")
-      .remove({ id: parseInt(id) })
-      .write();
-
+    const productKey = Object.keys(products)[0];
+    await productsRef.child(productKey).remove();
     res.json({ success: true });
   } catch (error) {
     console.error("Error deleting product:", error);
     res.status(500).json({ error: "Error al eliminar el producto" });
   }
 });
-// Manejo de órdenes
-server.post("/orders", authMiddleware, (req, res) => {
-  try {
-    const db = router.db;
-    const orderData = req.body;
 
+server.post("/orders", authMiddleware, async (req, res) => {
+  try {
+    const orderData = req.body;
     const newOrder = {
       ...orderData,
       id: Date.now(),
       status: orderData.status || "pending",
-      date: orderData.date || new Date().toISOString().split('T')[0],
+      date: orderData.date || new Date().toISOString().split("T")[0],
       products: orderData.products || [],
       total: Number(orderData.total) || 0,
     };
 
-    db.get("orders").push(newOrder).write();
+    await db.ref("orders").push(newOrder);
     res.json(newOrder);
   } catch (error) {
     console.error("Error creating order:", error);
@@ -259,39 +362,40 @@ server.post("/orders", authMiddleware, (req, res) => {
   }
 });
 
-// Obtener órdenes por usuario
-server.get("/orders/user/:userId", (req, res) => {
+server.get("/orders/user/:userId", async (req, res) => {
   try {
-    const db = router.db;
     const { userId } = req.params;
-    
-    const orders = db
-      .get("orders")
-      .filter({ userId: parseInt(userId) })
-      .value();
-
-    res.json(orders);
+    const snapshot = await db
+      .ref("orders")
+      .orderByChild("userId")
+      .equalTo(parseInt(userId))
+      .once("value");
+    const orders = snapshot.val();
+    res.json(orders ? Object.values(orders) : []);
   } catch (error) {
     console.error("Error fetching user orders:", error);
     res.status(500).json({ error: "Error al obtener las órdenes" });
   }
 });
 
-// Actualizar estado de orden
-server.put("/orders/:id", authMiddleware, (req, res) => {
+server.put("/orders/:id", authMiddleware, async (req, res) => {
   try {
-    const db = router.db;
     const { id } = req.params;
     const updateData = req.body;
 
-    const existingOrder = db
-      .get("orders")
-      .find({ id: parseInt(id) })
-      .value();
+    const ordersRef = db.ref("orders");
+    const snapshot = await ordersRef
+      .orderByChild("id")
+      .equalTo(parseInt(id))
+      .once("value");
+    const orders = snapshot.val();
 
-    if (!existingOrder) {
+    if (!orders) {
       return res.status(404).json({ error: "Orden no encontrada" });
     }
+
+    const orderKey = Object.keys(orders)[0];
+    const existingOrder = orders[orderKey];
 
     const updatedOrder = {
       ...existingOrder,
@@ -299,11 +403,7 @@ server.put("/orders/:id", authMiddleware, (req, res) => {
       id: parseInt(id),
     };
 
-    db.get("orders")
-      .find({ id: parseInt(id) })
-      .assign(updatedOrder)
-      .write();
-
+    await ordersRef.child(orderKey).update(updatedOrder);
     res.json(updatedOrder);
   } catch (error) {
     console.error("Error updating order:", error);
@@ -311,25 +411,23 @@ server.put("/orders/:id", authMiddleware, (req, res) => {
   }
 });
 
-// Eliminar orden
-server.delete("/orders/:id", authMiddleware, (req, res) => {
+server.delete("/orders/:id", authMiddleware, async (req, res) => {
   try {
-    const db = router.db;
     const { id } = req.params;
 
-    const order = db
-      .get("orders")
-      .find({ id: parseInt(id) })
-      .value();
+    const ordersRef = db.ref("orders");
+    const snapshot = await ordersRef
+      .orderByChild("id")
+      .equalTo(parseInt(id))
+      .once("value");
+    const orders = snapshot.val();
 
-    if (!order) {
+    if (!orders) {
       return res.status(404).json({ error: "Orden no encontrada" });
     }
 
-    db.get("orders")
-      .remove({ id: parseInt(id) })
-      .write();
-
+    const orderKey = Object.keys(orders)[0];
+    await ordersRef.child(orderKey).remove();
     res.json({ success: true });
   } catch (error) {
     console.error("Error deleting order:", error);
@@ -337,36 +435,34 @@ server.delete("/orders/:id", authMiddleware, (req, res) => {
   }
 });
 
-// Endpoints para categorías
-server.get("/categories", (req, res) => {
+server.get("/categories", async (req, res) => {
   try {
-    const db = router.db;
-    const categories = db.get("categories").value();
-    res.json(categories);
+    const snapshot = await db.ref("categories").once("value");
+    const categories = snapshot.val();
+    res.json(categories ? Object.values(categories) : []);
   } catch (error) {
     console.error("Error fetching categories:", error);
     res.status(500).json({ error: "Error al obtener las categorías" });
   }
 });
 
-// Búsqueda de productos
-server.get("/products/search", (req, res) => {
+server.get("/products/search", async (req, res) => {
   try {
-    const db = router.db;
     const { q, category } = req.query;
-    
-    let products = db.get("products").value();
+    const snapshot = await db.ref("products").once("value");
+    let products = snapshot.val() ? Object.values(snapshot.val()) : [];
 
     if (q) {
-      products = products.filter(product => 
-        product.name.toLowerCase().includes(q.toLowerCase()) ||
-        product.description.toLowerCase().includes(q.toLowerCase())
+      products = products.filter(
+        (product) =>
+          product.name.toLowerCase().includes(q.toLowerCase()) ||
+          product.description.toLowerCase().includes(q.toLowerCase())
       );
     }
 
     if (category) {
-      products = products.filter(product => 
-        product.category.toLowerCase() === category.toLowerCase()
+      products = products.filter(
+        (product) => product.category.toLowerCase() === category.toLowerCase()
       );
     }
 
@@ -377,29 +473,33 @@ server.get("/products/search", (req, res) => {
   }
 });
 
-// Productos por condominio
-server.get("/products/condominio/:condominio", (req, res) => {
+server.get("/products/condominio/:condominio", async (req, res) => {
   try {
-    const db = router.db;
     const { condominio } = req.params;
-    
-    const products = db
-      .get("products")
-      .filter({ condominio })
-      .value();
-
-    res.json(products);
+    const snapshot = await db
+      .ref("products")
+      .orderByChild("condominio")
+      .equalTo(condominio)
+      .once("value");
+    const products = snapshot.val();
+    res.json(products ? Object.values(products) : []);
   } catch (error) {
     console.error("Error fetching condominium products:", error);
-    res.status(500).json({ error: "Error al obtener los productos del condominio" });
+    res
+      .status(500)
+      .json({ error: "Error al obtener los productos del condominio" });
   }
 });
 
-// Rutas existentes
+// Middleware de autenticación para rutas no públicas
 server.use(/^(?!\/auth).*$/, authMiddleware);
-server.use(router);
 
-// Iniciar servidor
-server.listen(3001, () => {
-  console.log("JSON Server está corriendo en http://localhost:3001");
-});
+// Configuración del servidor
+if (process.env.NODE_ENV !== "production") {
+  const PORT = process.env.PORT || 3000;
+  server.listen(PORT, () => {
+    console.log(`Servidor escuchando en el puerto ${PORT}`);
+  });
+}
+
+module.exports = server;
